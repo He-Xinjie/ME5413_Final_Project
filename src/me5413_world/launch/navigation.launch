@@ -4,8 +4,9 @@
   <node name="teleop_twist_keyboard" pkg="teleop_twist_keyboard" type="teleop_twist_keyboard.py" output="screen" respawn="true"/>
 
   <!-- Run the map server -->
-  <arg name="map_file" default="$(find me5413_world)/maps/my_map.yaml"/>
+  <arg name="map_file" default="$(find me5413_team_solution)/maps/final/2Dmap/map_clean.yaml"/>
   <node name="map_server" pkg="map_server" type="map_server" args="$(arg map_file)" />
+
   
   <!-- Launch the AMCL Localizer -->
   <include file="$(find jackal_navigation)/launch/include/amcl.launch" />
