@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import math
 import cv2
 import numpy as np
 import rospy
@@ -38,7 +39,7 @@ class BoxCounter:
 
         rospy.Subscriber(self.rgb_topic, Image, self.rgb_callback, queue_size=1)
         rospy.Subscriber(self.depth_topic, Image, self.depth_callback, queue_size=1)
-        
+
         self.enable_detection = False
         rospy.Subscriber("/box_counter/enable", Bool, self.enable_callback, queue_size=1)
 
@@ -47,28 +48,21 @@ class BoxCounter:
         cv2.namedWindow(self.window, cv2.WINDOW_NORMAL)
         cv2.namedWindow(self.mask_window, cv2.WINDOW_NORMAL)
 
-        # Load offline classifier
+        # Offline classifier
         self.classifier = DigitClassifier()
         rospy.loginfo("Digit classifier loaded.")
 
-        # Track-based deduplication
+        # -------- tracking / confirmation --------
         self.tracks = []
         self.confirmed = []
-
-        # Associate new observations to temp tracks
-        self.assoc_dist = 0.20
-
-        # Deduplicate confirmed boxes
-        self.confirmed_dist = 0.15
-
-        # Votes needed to confirm one box
-        self.confirm_votes = 5
-
-        # Remove stale temp tracks
-        self.max_missed = 8
-
-        # Classifier acceptance threshold
-        self.score_thresh = 0.55
+        
+        self.assoc_dist = 0.80
+        self.confirmed_dist = 0.45
+        self.confirm_votes = 6
+        self.max_missed = 12
+        self.score_thresh = 0.60
+        self.cluster_dist_thresh = 1.2
+        self.min_points_per_cluster = 3
 
         self.last_print_time = rospy.Time.now()
 
@@ -210,8 +204,7 @@ class BoxCounter:
             if best_votes >= self.confirm_votes:
                 duplicated = False
                 for cf in self.confirmed:
-                    if cf["digit"] != best_digit:
-                        continue
+                    # 这里先不要求 digit 相同，纯按空间去重更稳
                     dist = np.hypot(cf["x"] - tr["x"], cf["y"] - tr["y"])
                     if dist < self.confirmed_dist:
                         duplicated = True
@@ -224,7 +217,7 @@ class BoxCounter:
                         "y": tr["y"],
                     })
                     rospy.loginfo(
-                        "CONFIRMED BOX: digit=%d at map(%.2f, %.2f)",
+                        "CONFIRMED BOX OBS: digit=%d at map(%.2f, %.2f)",
                         best_digit, tr["x"], tr["y"]
                     )
             else:
@@ -232,55 +225,86 @@ class BoxCounter:
 
         self.tracks = remaining_tracks
 
-    def cluster_confirmed_boxes(self, dist_thresh=0.25):
+    def cluster_confirmed_boxes(self, dist_thresh=1.0, min_points_per_cluster=2):
         """
-        按 digit 分组后，对 confirmed 做空间聚类。
-        每个簇只保留一个箱子中心。
+        先按空间聚类（不区分数字），再在每个簇内做数字投票。
+
+        这样更符合：
+        - 一个箱子被多次观测
+        - 同一个箱子可能存在误识别
+        - 四面都有数字，本质是同一个物理物体
         """
-        clustered = []
+        if not self.confirmed:
+            return []
 
-        for digit in sorted(set(det["digit"] for det in self.confirmed)):
-            pts = [det for det in self.confirmed if det["digit"] == digit]
-            used = [False] * len(pts)
+        points = self.confirmed[:]
+        used = [False] * len(points)
+        clusters = []
 
-            for i in range(len(pts)):
-                if used[i]:
-                    continue
+        # -------- Step 1: 空间聚类 --------
+        for i in range(len(points)):
+            if used[i]:
+                continue
 
-                cluster = [pts[i]]
-                used[i] = True
+            cluster_indices = [i]
+            used[i] = True
 
-                changed = True
-                while changed:
-                    changed = False
-                    for j in range(len(pts)):
-                        if used[j]:
-                            continue
+            changed = True
+            while changed:
+                changed = False
+                for j in range(len(points)):
+                    if used[j]:
+                        continue
 
-                        for c in cluster:
-                            dist = np.hypot(c["x"] - pts[j]["x"], c["y"] - pts[j]["y"])
-                            if dist < dist_thresh:
-                                cluster.append(pts[j])
-                                used[j] = True
-                                changed = True
-                                break
+                    px = points[j]["x"]
+                    py = points[j]["y"]
 
-                cx = np.mean([p["x"] for p in cluster])
-                cy = np.mean([p["y"] for p in cluster])
+                    for idx in cluster_indices:
+                        qx = points[idx]["x"]
+                        qy = points[idx]["y"]
 
-                clustered.append({
-                    "digit": digit,
-                    "x": float(cx),
-                    "y": float(cy),
-                    "count": len(cluster)
-                })
+                        dist = math.hypot(px - qx, py - qy)
+                        if dist <= dist_thresh:
+                            cluster_indices.append(j)
+                            used[j] = True
+                            changed = True
+                            break
 
-        return clustered
+            clusters.append(cluster_indices)
 
+        # -------- Step 2: 每个簇内部数字投票 --------
+        results = []
+        for cluster in clusters:
+            if len(cluster) < min_points_per_cluster:
+                # 丢掉太孤立的小簇，减少噪声
+                continue
+
+            xs = [points[idx]["x"] for idx in cluster]
+            ys = [points[idx]["y"] for idx in cluster]
+            digits = [points[idx]["digit"] for idx in cluster]
+
+            vote_count = {}
+            for d in digits:
+                vote_count[d] = vote_count.get(d, 0) + 1
+
+            final_digit = max(vote_count, key=vote_count.get)
+
+            results.append({
+                "digit": final_digit,
+                "x": float(sum(xs) / len(xs)),
+                "y": float(sum(ys) / len(ys)),
+                "count": len(cluster),
+                "votes": vote_count
+            })
+
+        return results
 
     def get_top4_digit_counts(self):
-        clustered = self.cluster_confirmed_boxes(dist_thresh=0.25)
-    
+        clustered = self.cluster_confirmed_boxes(
+            dist_thresh=self.cluster_dist_thresh,
+            min_points_per_cluster=self.min_points_per_cluster
+        )
+
         raw_counts = {}
         for det in clustered:
             d = det["digit"]
@@ -289,7 +313,7 @@ class BoxCounter:
         # 只保留出现次数最多的4个数字
         top4 = sorted(raw_counts.items(), key=lambda x: x[1], reverse=True)[:4]
         top4_digits = set([d for d, _ in top4])
-    
+
         final_counts = {d: c for d, c in raw_counts.items() if d in top4_digits}
         return final_counts, clustered
 
@@ -299,16 +323,14 @@ class BoxCounter:
 
     def print_final_result(self):
         counts, clustered = self.get_top4_digit_counts()
-    
+
         if not counts:
             rospy.logwarn("No valid detections.")
             return
 
-        # 输出所有数字及次数
         rospy.loginfo("========== FINAL RESULT ==========")
         rospy.loginfo("Digits and counts: %s", counts)
 
-        # 找最少的
         least_digit = min(counts, key=counts.get)
         least_count = counts[least_digit]
 
@@ -317,7 +339,8 @@ class BoxCounter:
             least_digit,
             least_count
         )
-
+        rospy.loginfo("Clustered boxes total: %d", len(clustered))
+        rospy.loginfo("Raw confirmed total: %d", len(self.confirmed))
         rospy.loginfo("==================================")
 
     def spin(self):
@@ -327,7 +350,7 @@ class BoxCounter:
             if self.rgb_img is None:
                 rate.sleep()
                 continue
-            
+
             img = self.rgb_img.copy()
 
             if not self.enable_detection:
@@ -342,7 +365,7 @@ class BoxCounter:
             rospy.loginfo_throttle(1.0, "Detected %d digit candidates", len(digit_boxes))
 
             self.age_tracks()
-                
+
             for (x, y, w, h) in digit_boxes:
                 # 过滤太小的数字框
                 if h < 25 or w < 12:
@@ -352,7 +375,7 @@ class BoxCounter:
                 ratio = w / float(h)
                 if ratio < 0.20 or ratio > 1.20:
                     continue
-                    
+
                 roi = cv2.cvtColor(img[y:y + h, x:x + w], cv2.COLOR_BGR2GRAY)
                 digit, score = self.classifier.classify(roi)
 
@@ -423,7 +446,11 @@ class BoxCounter:
             if (rospy.Time.now() - self.last_print_time).to_sec() > 2.0:
                 counts, clustered = self.get_top4_digit_counts()
                 rospy.loginfo("Current clustered top4 counts: %s", counts)
-                rospy.loginfo("Clustered boxes total: %d | Raw confirmed total: %d", len(clustered), len(self.confirmed))
+                rospy.loginfo(
+                    "Clustered boxes total: %d | Raw confirmed total: %d",
+                    len(clustered),
+                    len(self.confirmed)
+                )
                 self.last_print_time = rospy.Time.now()
 
             cv2.imshow(self.window, img)

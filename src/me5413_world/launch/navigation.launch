@@ -12,19 +12,13 @@
   <rosparam file="$(find me5413_world)/config/navigation/amcl_params.yaml" command="load" ns="amcl" />
 
   <!-- Launch Move Base -->
+  <!--original code -->
   <include file="$(find jackal_navigation)/launch/include/move_base.launch" />
 
   <!-- Launch Rviz with our settings -->
   <node type="rviz" name="rviz" pkg="rviz" args="-d $(find me5413_world)/rviz/navigation.rviz" output="log" respawn="true"/>
 
-  <!-- <node ns="me5413_world" pkg="me5413_world" type="goal_publisher_node" name="goal_publisher_node" output="screen" /> -->
+  <node ns="me5413_world" pkg="me5413_world" type="goal_publisher_node" name="goal_publisher_node" output="screen" />
   
-  <!-- <node pkg="me5413_team_solution"
-      type="waypoint_nav.py"
-      name="waypoint_nav"
-      output="screen">
-    <param name="waypoint_file"
-           value="$(find me5413_team_solution)/config/waypoints.yaml"/> 
-  </node> -->
 
 </launch>
