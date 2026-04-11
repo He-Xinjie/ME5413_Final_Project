@@ -1,0 +1,29 @@
+<launch>
+
+  <node pkg="move_base" type="move_base" respawn="false" name="move_base" output="screen">
+
+    <!-- Costmap common params -->
+    <rosparam file="$(find me5413_team_solution)/params/costmap_common_params.yaml" command="load" ns="global_costmap" />
+    <rosparam file="$(find me5413_team_solution)/params/costmap_common_params.yaml" command="load" ns="local_costmap" />
+
+    <!-- Costmap specific params -->
+    <rosparam file="$(find me5413_team_solution)/params/global_costmap_params.yaml" command="load" />
+    <rosparam file="$(find me5413_team_solution)/params/local_costmap_params.yaml" command="load" />
+
+    <!-- Planner params -->
+    <rosparam file="$(find me5413_team_solution)/params/teb_local_planner_params.yaml" command="load" />
+    <rosparam file="$(find me5413_team_solution)/params/move_base_params.yaml" command="load" />
+
+    <!-- Use global_planner (A*/Dijkstra) and TEB local planner -->
+    <param name="base_global_planner" type="string" value="global_planner/GlobalPlanner" />
+    <param name="base_local_planner" value="teb_local_planner/TebLocalPlannerROS" />
+
+    <!-- Global planner params -->
+    <param name="GlobalPlanner/allow_unknown" value="false" />
+    <param name="GlobalPlanner/use_dijkstra" value="true" />
+    <param name="GlobalPlanner/default_tolerance" value="0.5" />
+
+    <remap from="odom" to="odometry/filtered" />
+  </node>
+
+</launch>

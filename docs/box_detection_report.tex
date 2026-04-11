@@ -1,0 +1,676 @@
+\documentclass[12pt,a4paper]{article}
+
+% ==================== Packages ====================
+\usepackage[UTF8]{ctex}
+\usepackage{geometry}
+\geometry{left=2.5cm, right=2.5cm, top=2.5cm, bottom=2.5cm}
+
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{float}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{enumitem}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\usepackage{tikz}
+\usetikzlibrary{shapes.geometric, arrows.meta, positioning, calc}
+
+% ==================== Code listing style ====================
+\lstset{
+  language=Python,
+  basicstyle=\ttfamily\small,
+  keywordstyle=\color{blue}\bfseries,
+  commentstyle=\color{gray},
+  stringstyle=\color{red!70!black},
+  numbers=left,
+  numberstyle=\tiny\color{gray},
+  frame=single,
+  breaklines=true,
+  captionpos=b,
+  tabsize=4,
+  showstringspaces=false
+}
+
+% ==================== Title ====================
+\title{\textbf{ME5413 Final Project\\基于 RGB-D 相机的方块视觉检测、计数与去重系统}}
+\author{ME5413 Team}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+本文档详细描述了 ME5413 Final Project 中方块视觉检测、计数与去重子系统的设计与实现。
+场景中散布着标有数字 1--9 的 0.8\,m 立方体方块，机器人在自主巡逻过程中需要利用前置 RGB-D 深度相机
+对每种数字的方块分别计数，并最终确定出现次数最少的数字编号。
+系统采用\textbf{边缘--灰度双通道模板匹配}进行数字识别，
+利用\textbf{深度反投影 + TF 坐标变换}获取方块的全局地图坐标，
+通过\textbf{基于距离的 3D 聚类与多帧投票机制}实现同一物理方块的去重，
+有效解决了机器人从不同角度、不同距离重复观测同一方块导致的计数膨胀问题。
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+% ================================================================
+\section{问题描述与系统概览}
+% ================================================================
+
+\subsection{任务背景}
+
+在 ME5413 Final Project 的 Gazebo 仿真场景中，下层区域散布着多个标有数字 1--9 的立方体方块
+（边长 0.8\,m）。机器人（Jackal）需要在自主巡逻过程中：
+
+\begin{enumerate}[label=(\arabic*)]
+  \item 识别每个方块上标注的数字；
+  \item 对各个数字分别统计其对应方块的数量；
+  \item 确定出现次数最少的数字编号，作为后续导航决策的依据。
+\end{enumerate}
+
+\subsection{核心挑战}
+
+方块计数的核心难点在于\textbf{去重}：由于机器人在巡逻路径上会从不同角度、不同距离多次观测到同一个方块，
+若不加以区分，将导致严重的计数膨胀。此外，还需要应对以下挑战：
+
+\begin{itemize}
+  \item 方块在不同距离下的图像尺寸差异较大，需要多尺度匹配；
+  \item 光照条件和观测角度变化可能导致模板匹配得分波动；
+  \item 深度传感器存在噪声，3D 定位需要滤波处理；
+  \item 数字之间的视觉相似性（如 6 与 9、3 与 8）可能导致误识别。
+\end{itemize}
+
+\subsection{系统总体架构}
+
+系统由三个核心模块组成，处理流程如图~\ref{fig:pipeline} 所示。
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+  block/.style={rectangle, draw, fill=blue!10, text width=6em, text centered,
+                rounded corners, minimum height=3em, font=\small},
+  data/.style={rectangle, draw, fill=green!10, text width=5em, text centered,
+               minimum height=2.5em, font=\small},
+  decision/.style={diamond, draw, fill=yellow!15, text width=4.5em, text centered,
+                   minimum height=2em, font=\small, inner sep=1pt},
+  arrow/.style={-{Stealth[length=3mm]}, thick},
+  node distance=1.2cm and 1.5cm
+]
+
+% Input
+\node[data] (rgb) {RGB 图像};
+\node[data, right=2.5cm of rgb] (depth) {Depth 图像};
+
+% Template matching
+\node[block, below=1.0cm of rgb] (canny) {Canny 边缘检测};
+\node[block, below=of canny] (match) {多尺度模板匹配\\(边缘 + 灰度)};
+\node[block, below=of match] (nms) {区域 NMS\\(同帧去重)};
+
+% Decision
+\node[decision, below=1.0cm of nms] (thresh) {得分 $\geq$\\ 0.60?};
+
+% 3D localization
+\node[block, below right=1.0cm and 0.5cm of thresh] (depthread) {深度读取\\(中值滤波)};
+\node[block, below=of depthread] (backproj) {反投影到\\相机 3D 坐标};
+\node[block, below=of backproj] (tf) {TF 变换到\\map 坐标系};
+
+% Clustering
+\node[block, below=of tf] (cluster) {距离聚类\\($r < 1.0$\,m)};
+\node[decision, below=1.0cm of cluster] (existing) {匹配已有\\候选?};
+\node[block, below left=1.0cm and 1.5cm of existing] (newcand) {创建新候选};
+\node[block, below right=1.0cm and 1.5cm of existing] (vote) {投票 +\\更新坐标};
+
+% Output
+\node[block, below=3.5cm of existing, fill=red!10] (output) {汇总去重后\\计数结果};
+
+% Arrows
+\draw[arrow] (rgb) -- (canny);
+\draw[arrow] (canny) -- (match);
+\draw[arrow] (match) -- (nms);
+\draw[arrow] (nms) -- (thresh);
+\draw[arrow] (thresh) -- node[right, font=\small]{Yes} (depthread);
+\draw[arrow] (depth) |- (depthread);
+\draw[arrow] (depthread) -- (backproj);
+\draw[arrow] (backproj) -- (tf);
+\draw[arrow] (tf) -- (cluster);
+\draw[arrow] (cluster) -- (existing);
+\draw[arrow] (existing) -- node[above left, font=\small]{No} (newcand);
+\draw[arrow] (existing) -- node[above right, font=\small]{Yes} (vote);
+\draw[arrow] (newcand) |- (output);
+\draw[arrow] (vote) |- (output);
+
+% Draw only label
+\node[block, below left=1.0cm and 2.0cm of thresh, fill=gray!10] (drawonly) {仅绘制检测框\\(不计数)};
+\draw[arrow] (thresh) -- node[above, font=\small]{No} (drawonly);
+
+\end{tikzpicture}
+\caption{方块检测与去重系统整体流程}
+\label{fig:pipeline}
+\end{figure}
+
+% ================================================================
+\section{RGB-D 深度相机配置}
+% ================================================================
+
+\subsection{相机硬件模型}
+
+系统将原始的 Pointgrey Flea3 RGB 相机替换为基于 Gazebo \texttt{libgazebo\_ros\_openni\_kinect.so}
+插件的 RGB-D 深度相机，同时提供 RGB 图像和深度图像。相机通过 URDF/Xacro 文件
+（\texttt{depth\_camera.urdf.xacro}）定义并挂载于机器人前方。
+
+\subsection{相机参数}
+
+表~\ref{tab:camera_params} 列出了相机的主要参数配置。
+
+\begin{table}[H]
+\centering
+\caption{深度相机参数配置}
+\label{tab:camera_params}
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{参数} & \textbf{值} & \textbf{说明} \\
+\midrule
+帧率 (fps) & 30 & 图像更新频率 \\
+图像宽度 (width) & 640 & 像素 \\
+图像高度 (height) & 512 & 像素 \\
+水平视场角 (hfov) & 1.047\,rad ($60°$) & 水平方向覆盖范围 \\
+最近裁剪距离 (near) & 0.1\,m & 近裁剪面 \\
+最远裁剪距离 (far) & 10.0\,m & 远裁剪面 \\
+深度噪声标准差 & 0.007 & 高斯噪声模拟 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{发布的 ROS 话题}
+
+相机节点发布以下 ROS 话题供检测系统使用：
+
+\begin{table}[H]
+\centering
+\caption{相机发布的 ROS 话题}
+\label{tab:camera_topics}
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{话题} & \textbf{消息类型} & \textbf{说明} \\
+\midrule
+\texttt{/front/image\_raw} & \texttt{sensor\_msgs/Image} & RGB 彩色图像 \\
+\texttt{/front/depth/image\_raw} & \texttt{sensor\_msgs/Image} & 深度图像 (32FC1, 单位: m) \\
+\texttt{/front/depth/points} & \texttt{sensor\_msgs/PointCloud2} & 点云数据 \\
+\texttt{/front/camera\_info} & \texttt{sensor\_msgs/CameraInfo} & 相机内参矩阵 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% ================================================================
+\section{数字识别模块}
+\label{sec:detection}
+% ================================================================
+
+\subsection{模板准备}
+
+\subsubsection{模板来源}
+
+检测模板直接取自 Gazebo 仿真中方块模型的纹理贴图文件。每个数字 $i \in \{1, 2, \dots, 9\}$ 的
+纹理位于：
+\begin{center}
+\texttt{me5413\_world/models/number\textit{i}/materials/textures/number\textit{i}.png}
+\end{center}
+
+\subsubsection{模板提取}
+
+纹理贴图为立方体的展开图（$3 \times 3$ 网格布局）。系统提取第 2 行第 3 列的面
+（索引为 $[h/3 : 2h/3,\; 2w/3 : w]$）作为单面模板，并统一缩放至 $80 \times 80$ 像素。
+
+\subsubsection{双通道模板生成}
+
+对每个数字模板生成两种表示：
+\begin{itemize}
+  \item \textbf{灰度模板}：直接转换为灰度图像，保留亮度和纹理信息；
+  \item \textbf{边缘模板}：对灰度模板施加 Canny 边缘检测（阈值 50/150），提取结构轮廓特征。
+\end{itemize}
+
+\subsection{多尺度模板匹配}
+
+\subsubsection{尺度空间搜索}
+
+由于方块在不同距离下的成像尺寸不同，系统在 4 个缩放比例下进行模板匹配：
+\begin{equation}
+  S = \{0.5,\; 0.7,\; 1.0,\; 1.3\}
+\end{equation}
+
+对于每个缩放比例 $s \in S$，将模板（灰度和边缘两个版本）缩放至 $(80s \times 80s)$ 像素，
+然后分别在输入图像上进行滑动窗口匹配。缩放后模板尺寸小于 25 像素的将被跳过，以避免过小目标的误检。
+
+\subsubsection{双通道融合匹配}
+
+对于每个模板和每个缩放比例，系统同时计算两种匹配得分：
+
+\paragraph{边缘匹配} 对输入图像进行 Canny 边缘检测（阈值 50/150），与边缘模板进行归一化互相关匹配：
+\begin{equation}
+  R_{\text{edge}}(x, y) = \text{NCC}\bigl(E_{\text{img}},\; E_{\text{tmpl}}^{(s)}\bigr)
+\end{equation}
+其中 $E_{\text{img}}$ 为输入图像的 Canny 边缘图，$E_{\text{tmpl}}^{(s)}$ 为缩放后的边缘模板，
+NCC 表示 \texttt{TM\_CCOEFF\_NORMED} 归一化互相关系数。
+
+\paragraph{灰度匹配} 直接用灰度图像与灰度模板进行同样的归一化互相关匹配：
+\begin{equation}
+  R_{\text{gray}}(x, y) = \text{NCC}\bigl(I_{\text{gray}},\; T_{\text{gray}}^{(s)}\bigr)
+\end{equation}
+
+\paragraph{得分融合} 最终匹配得分为两通道的等权平均：
+\begin{equation}
+  R_{\text{combined}}(x, y) = 0.5 \cdot R_{\text{edge}}(x, y) + 0.5 \cdot R_{\text{gray}}(x, y)
+  \label{eq:combined_score}
+\end{equation}
+
+\textbf{设计动机}：边缘通道对光照变化具有鲁棒性，灰度通道保留了纹理细节。
+两者融合使得匹配结果既稳定又具有区分度，优于单一通道的匹配。
+
+\subsection{同帧内区域去重 (NMS)}
+
+在同一帧图像中，不同缩放比例和不同数字模板可能在相近位置产生多个检测结果。
+系统采用基于位置的区域合并策略进行非极大值抑制（NMS）：
+
+\begin{algorithm}[H]
+\caption{同帧内区域去重}
+\label{alg:inframe_nms}
+\begin{algorithmic}[1]
+\REQUIRE 所有检测结果集合 $D = \{(n_i, s_i, \mathbf{p}_i, w_i, h_i)\}$
+\ENSURE 去重后的最优检测集合
+\STATE 初始化区域列表 $\mathcal{R} \leftarrow \emptyset$
+\FOR{每个检测 $(n, s, \mathbf{p}, w, h) \in D$}
+  \STATE $\textit{placed} \leftarrow \text{false}$
+  \FOR{每个已有区域 $R_j \in \mathcal{R}$}
+    \IF{$|\mathbf{p} - \mathbf{p}_{R_j}| < 50\text{\,px}$（在 $x$ 和 $y$ 方向上均满足）}
+      \STATE 将当前检测加入 $R_j$
+      \STATE $\textit{placed} \leftarrow \text{true}$
+      \STATE \textbf{break}
+    \ENDIF
+  \ENDFOR
+  \IF{$\textit{placed} = \text{false}$}
+    \STATE 创建新区域 $R_{\text{new}} = \{(n, s, \mathbf{p}, w, h)\}$，加入 $\mathcal{R}$
+  \ENDIF
+\ENDFOR
+\FOR{每个区域 $R_j \in \mathcal{R}$}
+  \STATE 按得分 $s$ 降序排列 $R_j$ 中的检测
+  \STATE 保留得分最高的检测
+\ENDFOR
+\RETURN 每个区域的最优检测
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{检测阈值设计}
+
+系统设置了两级阈值以区分可视化显示和实际计数：
+
+\begin{table}[H]
+\centering
+\caption{检测阈值设置}
+\label{tab:thresholds}
+\begin{tabular}{@{}lcp{8cm}@{}}
+\toprule
+\textbf{阈值} & \textbf{值} & \textbf{用途} \\
+\midrule
+\texttt{draw\_threshold} & 0.45 & 在可视化图像上绘制检测框（仅显示，不触发计数） \\
+\texttt{count\_threshold} & 0.60 & 触发 3D 定位和去重计数流程 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+两级阈值的设计使得操作者可以在可视化界面上观察到尚未达到计数标准的弱检测，
+有助于调试和参数调优。
+
+% ================================================================
+\section{3D 定位模块}
+\label{sec:3d_localization}
+% ================================================================
+
+当模板匹配得分超过 \texttt{count\_threshold}（0.60）时，系统进入 3D 定位流程，
+将检测结果从图像坐标转换为全局地图坐标。
+
+\subsection{深度值获取}
+
+在检测框的中心像素 $(u_c, v_c)$ 处，取一个 $5 \times 5$ 像素的正方形区域，
+对区域内的有效深度值（过滤掉 $d < 0.3$\,m 和 $d > 10.0$\,m 的无效值）取中值：
+
+\begin{equation}
+  d = \text{median}\bigl\{d_{ij} \mid (i, j) \in \mathcal{P},\; 0.3 \leq d_{ij} \leq 10.0 \bigr\}
+  \label{eq:depth_median}
+\end{equation}
+
+其中 $\mathcal{P} = \{(u_c \pm 2, v_c \pm 2)\}$ 为 patch 区域。
+
+\textbf{设计动机}：中值滤波相比均值滤波对深度噪声和空洞值更加鲁棒，
+可以有效排除边缘处的深度跳变和传感器噪声。
+
+\subsection{像素到相机 3D 坐标的反投影}
+
+利用从 \texttt{/front/camera\_info} 话题获取的相机内参矩阵
+$\mathbf{K} = \begin{bmatrix} f_x & 0 & c_x \\ 0 & f_y & c_y \\ 0 & 0 & 1 \end{bmatrix}$，
+将像素坐标 $(u, v)$ 和深度 $d$ 反投影为相机光学坐标系下的 3D 点：
+
+\begin{equation}
+  \begin{cases}
+    X_{\text{cam}} = \dfrac{(u - c_x) \cdot d}{f_x} \\[8pt]
+    Y_{\text{cam}} = \dfrac{(v - c_y) \cdot d}{f_y} \\[8pt]
+    Z_{\text{cam}} = d
+  \end{cases}
+  \label{eq:backproject}
+\end{equation}
+
+其中 $f_x, f_y$ 为焦距（像素），$c_x, c_y$ 为光心坐标（像素）。
+
+\subsection{TF 坐标变换}
+
+使用 ROS 的 TF2 坐标变换系统，将相机光学坐标系 (\texttt{front\_camera\_optical}) 下的
+3D 点变换到全局地图坐标系 (\texttt{map})。变换链为：
+
+\begin{equation}
+  \texttt{front\_camera\_optical}
+  \xrightarrow{\text{固定关节}}
+  \texttt{front\_camera}
+  \xrightarrow{\text{URDF}}
+  \texttt{base\_link}
+  \xrightarrow{\text{里程计}}
+  \texttt{odom}
+  \xrightarrow{\text{AMCL}}
+  \texttt{map}
+  \label{eq:tf_chain}
+\end{equation}
+
+变换使用 \texttt{rospy.Time(0)} 查询最新可用的 TF，避免因时间戳不同步导致的查询失败。
+变换后得到方块在全局地图中的坐标 $(m_x, m_y, m_z)$。
+
+% ================================================================
+\section{3D 聚类去重与投票机制}
+\label{sec:dedup}
+% ================================================================
+
+去重模块是整个系统的核心。它负责将来自多帧、多角度的检测结果合并为物理实体层面的唯一方块候选。
+
+\subsection{BoxCandidate 数据结构}
+
+每个 \texttt{BoxCandidate} 实例代表地图上的一个物理方块候选，包含以下属性：
+
+\begin{table}[H]
+\centering
+\caption{BoxCandidate 属性}
+\label{tab:boxcandidate}
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{属性} & \textbf{类型} & \textbf{说明} \\
+\midrule
+$x, y, z$ & float & 地图坐标（持续滑动平均更新） \\
+\texttt{votes} & dict $\{$digit: count$\}$ & 每个数字收到的投票计数 \\
+\texttt{obs\_count} & int & 累计观测次数（用于位置平均计算） \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{基于距离的聚类}
+
+当一次检测产生了地图坐标 $(m_x, m_y)$ 和识别数字 $n$ 后，系统执行以下聚类逻辑：
+
+\begin{algorithm}[H]
+\caption{3D 聚类去重}
+\label{alg:clustering}
+\begin{algorithmic}[1]
+\REQUIRE 新检测的地图坐标 $(m_x, m_y, m_z)$ 和数字 $n$
+\REQUIRE 已有候选列表 $\mathcal{C}$，聚类半径 $r_{\text{cluster}}$
+\ENSURE 更新后的候选列表
+\STATE $d_{\min} \leftarrow r_{\text{cluster}}$
+\STATE $C^* \leftarrow \text{null}$
+\FOR{每个候选 $C_j \in \mathcal{C}$}
+  \STATE $d_j \leftarrow \sqrt{(m_x - C_j.x)^2 + (m_y - C_j.y)^2}$
+  \IF{$d_j < d_{\min}$}
+    \STATE $d_{\min} \leftarrow d_j$
+    \STATE $C^* \leftarrow C_j$
+  \ENDIF
+\ENDFOR
+\IF{$C^* \neq \text{null}$}
+  \STATE 将数字 $n$ 的投票加入 $C^*$：$C^*.\text{votes}[n] \mathrel{+}= 1$
+  \STATE 更新 $C^*$ 的坐标（滑动平均）
+\ELSE
+  \STATE 创建新候选 $C_{\text{new}}(m_x, m_y, m_z, n)$，加入 $\mathcal{C}$
+\ENDIF
+\end{algorithmic}
+\end{algorithm}
+
+\subsubsection{聚类半径的选取}
+
+聚类半径 $r_{\text{cluster}} = 1.0$\,m 的选取依据：
+
+\begin{itemize}
+  \item 方块尺寸为 $0.8 \times 0.8 \times 0.8$\,m，对角线约 1.13\,m；
+  \item 从不同角度观测同一方块，定位偏差通常在 0.5\,m 以内；
+  \item 场景中相邻方块的最小间距约 1.5\,m；
+  \item 半径 1.0\,m 既能容纳同一方块的定位偏差，又不会将相邻方块错误合并。
+\end{itemize}
+
+\subsection{多帧投票机制}
+
+每次同一候选被检测到时，识别出的数字得到一票。候选的最终数字标签取票数最高者：
+
+\begin{equation}
+  n^* = \arg\max_{n \in \{1,\dots,9\}} \text{votes}[n]
+  \label{eq:voting}
+\end{equation}
+
+\textbf{示例}：某候选在 5 帧中被检测到，投票记录为 $\{\text{3}: 4,\; \text{8}: 1\}$，
+则最终数字为 3。即使某一帧因角度或遮挡将 ``3'' 误识别为 ``8''，多数投票仍能给出正确结果。
+
+\textbf{投票机制的优势}：
+\begin{enumerate}[label=(\arabic*)]
+  \item 对单次误识别具有鲁棒性——多数投票自动纠错；
+  \item 无需设定严格的得分阈值——低分正确检测和高分误检都通过投票得到公正权衡；
+  \item 随着观测次数增加，结果趋于收敛。
+\end{enumerate}
+
+\subsection{位置滑动平均}
+
+每次新观测归入已有候选时，使用递增平均（incremental mean）更新候选的地图坐标：
+
+\begin{equation}
+  \alpha_k = \frac{1}{k}, \quad
+  \begin{cases}
+    x_k = x_{k-1} + \alpha_k \cdot (x_{\text{obs}} - x_{k-1}) \\[4pt]
+    y_k = y_{k-1} + \alpha_k \cdot (y_{\text{obs}} - y_{k-1})
+  \end{cases}
+  \label{eq:running_avg}
+\end{equation}
+
+其中 $k$ 为累计观测次数。随着 $k$ 增大，$\alpha_k \to 0$，新观测的权重递减，
+候选位置趋于稳定。这等价于对所有历史观测取算术平均，但仅需 $O(1)$ 存储。
+
+\subsection{确认阈值}
+
+系统引入最小确认投票数 \texttt{min\_confirm\_votes}，
+只有总投票数达到此阈值的候选才被纳入最终计数：
+
+\begin{equation}
+  \text{is\_confirmed}(C) = \begin{cases} \text{true}, & \sum_n \text{votes}[n] \geq V_{\min} \\
+  \text{false}, & \text{otherwise} \end{cases}
+  \label{eq:confirm}
+\end{equation}
+
+当前 $V_{\min} = 1$（首次看到即计数）。在误检较多的场景中，可将此值调高至 2 或 3，
+要求多次确认才纳入计数。
+
+\subsection{帧间冷却机制}
+
+为避免连续帧对同一方块重复投票过多，系统引入帧间冷却（cooldown）机制：
+
+\begin{itemize}
+  \item 每当某数字的检测被成功 3D 定位并完成聚类后，该数字进入 \textbf{10 帧}的冷却期；
+  \item 在冷却期内，即使该数字再次被模板匹配检测到（得分超过阈值），也不触发 3D 定位和投票；
+  \item 冷却计数器每帧递减 1，降至 0 后恢复正常检测。
+\end{itemize}
+
+冷却机制的效果：在相机帧率 30\,fps 的条件下，同一数字的连续投票间隔至少为
+$10/30 \approx 0.33$\,s，足以使机器人产生位移，从而避免在静止状态下对同一方块的过度投票。
+
+% ================================================================
+\section{系统输出与可视化}
+% ================================================================
+
+\subsection{计数结果发布}
+
+系统通过以下 ROS 话题发布检测结果：
+
+\begin{table}[H]
+\centering
+\caption{系统输出话题}
+\label{tab:output_topics}
+\begin{tabular}{@{}llp{7cm}@{}}
+\toprule
+\textbf{话题} & \textbf{类型} & \textbf{说明} \\
+\midrule
+\texttt{/box\_detector/counts} & \texttt{String} & 去重后的各数字计数字典，如 \texttt{\{1:2, 3:1, 5:3\}} \\
+\texttt{/mission\_planner/min\_box\_id} & \texttt{String} & 当前计数最少的数字编号 \\
+\texttt{/box\_detector/image} & \texttt{Image} & 叠加检测框的可视化图像 \\
+\texttt{/box\_detector/markers} & \texttt{MarkerArray} & RViz 地图标记 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{可视化图像}
+
+在 RGB 画面上叠加以下信息：
+
+\begin{itemize}
+  \item \textbf{检测框}：绿色 = 普通检测，红色 = 新发现的方块，橙色 = 对已有候选的投票；
+  \item \textbf{文本标注}：数字编号、匹配得分、深度值；
+  \item \textbf{计数面板}：左上角显示去重后的各数字计数；
+  \item \textbf{候选数目}：显示当前系统中的候选总数。
+\end{itemize}
+
+\subsection{RViz 地图标记}
+
+在 RViz 的 2D 地图视图中为每个候选方块绘制：
+
+\begin{itemize}
+  \item \textbf{彩色立方体}（$0.6 \times 0.6 \times 0.6$\,m）——颜色按数字区分
+        （如 1=红色，2=绿色，3=蓝色等），已确认候选透明度 0.7，未确认的 0.3；
+  \item \textbf{浮动文本标签}——显示数字编号和累计投票数（如 ``\#3 (12)''）。
+\end{itemize}
+
+% ================================================================
+\section{与任务规划的集成}
+% ================================================================
+
+检测系统通过 \texttt{/mission\_planner/min\_box\_id} 话题将出现次数最少的数字编号
+传递给 Mission Planner 节点。Mission Planner 是一个有限状态机，其流程为：
+
+\begin{enumerate}[label=\arabic*.]
+  \item \textbf{EXPLORE\_LOWER}：按预设路径点在下层区域巡逻，期间 Box Detector 持续运行并计数；
+  \item 巡逻结束后等待最多 10\,s 接收计数结果；
+  \item 若超时未收到结果，默认使用 room 1；
+  \item 根据最少计数数字确定目标房间编号，进入后续状态（解锁出口、爬坡、进入上层房间）。
+\end{enumerate}
+
+Zone Navigator 节点也通过 \texttt{/box\_detector/counts} 话题订阅检测结果，
+在下层巡逻完成后输出方块计数汇总。
+
+% ================================================================
+\section{参数汇总}
+% ================================================================
+
+表~\ref{tab:all_params} 汇总了系统中所有可调参数及其默认值。
+
+\begin{table}[H]
+\centering
+\caption{系统参数汇总}
+\label{tab:all_params}
+\begin{tabular}{@{}lcp{7.5cm}@{}}
+\toprule
+\textbf{参数} & \textbf{默认值} & \textbf{说明} \\
+\midrule
+\texttt{cluster\_radius} & 1.0\,m & 3D 聚类半径，距离小于此值的检测归为同一方块 \\
+\texttt{min\_confirm\_votes} & 1 & 候选至少获得的投票数才计入最终计数 \\
+\texttt{count\_threshold} & 0.60 & 模板匹配得分 $\geq$ 此值才触发 3D 定位 \\
+\texttt{draw\_threshold} & 0.45 & 得分 $\geq$ 此值在画面上绘制检测框 \\
+\texttt{min\_detect\_size} & 25\,px & 缩放后模板的最小边长 \\
+\texttt{min\_depth} & 0.3\,m & 忽略过近的深度值 \\
+\texttt{max\_depth} & 10.0\,m & 忽略过远的深度值 \\
+\texttt{depth\_patch\_size} & 5 & 深度中值滤波的 patch 大小 \\
+\texttt{cooldown\_frames} & 10 & 同一数字检测成功后的冷却帧数 \\
+缩放比例 & $\{0.5, 0.7, 1.0, 1.3\}$ & 多尺度模板匹配的缩放因子 \\
+NMS 距离阈值 & 50\,px & 同帧内检测结果的合并距离 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% ================================================================
+\section{相关文件索引}
+% ================================================================
+
+\begin{table}[H]
+\centering
+\caption{系统相关文件}
+\label{tab:files}
+\begin{tabular}{@{}lp{8cm}@{}}
+\toprule
+\textbf{文件路径} & \textbf{作用} \\
+\midrule
+\texttt{scripts/box\_detector\_3d.py} & 3D 检测 + 去重主节点（RGB-D 版本） \\
+\texttt{scripts/box\_detector.py} & 2D 检测节点（仅 RGB，基于机器人位置去重） \\
+\texttt{scripts/mission\_planner.py} & 任务规划状态机，接收最少数字编号 \\
+\texttt{scripts/nav\_test.py} & 分区导航器，订阅计数结果 \\
+\texttt{launch/navigation.launch} & 启动检测与导航节点 \\
+\texttt{depth\_camera.urdf.xacro} & 深度相机 URDF 定义 \\
+\texttt{me5413\_world/models/number\textit{N}/} & 数字方块模型及纹理模板来源 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% ================================================================
+\section{2D 版本检测器对比}
+\label{sec:2d_comparison}
+% ================================================================
+
+项目中同时保留了一个 2D 版本的方块检测器（\texttt{box\_detector.py}），
+其模板匹配流程与 3D 版本相同，但去重策略有所不同：
+
+\begin{table}[H]
+\centering
+\caption{2D 版本与 3D 版本的去重策略对比}
+\label{tab:2d_vs_3d}
+\begin{tabular}{@{}lp{5.5cm}p{5.5cm}@{}}
+\toprule
+\textbf{特性} & \textbf{2D 版本 (box\_detector)} & \textbf{3D 版本 (box\_detector\_3d)} \\
+\midrule
+去重坐标 & 机器人自身位置 $(r_x, r_y)$ & 方块在 map 中的 3D 坐标 $(m_x, m_y)$ \\
+去重半径 & 4.0\,m & 1.0\,m \\
+去重精度 & 较低（依赖机器人位置而非方块位置） & 较高（直接定位方块） \\
+投票机制 & 无（直接计数） & 有（多帧投票，多数决） \\
+深度信息 & 不使用 & 使用（反投影 + 中值滤波） \\
+位置更新 & 无 & 滑动平均更新 \\
+RViz 标记 & 无 & 有（彩色立方体 + 文本标签） \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+3D 版本的核心优势在于直接定位方块在地图中的位置而非依赖机器人自身位置，
+使得去重半径可以大幅缩小（从 4.0\,m 降至 1.0\,m），
+同时通过投票机制提高了数字识别的鲁棒性。
+
+% ================================================================
+\section{总结}
+% ================================================================
+
+本系统通过三层架构——\textbf{数字识别层}（边缘--灰度双通道多尺度模板匹配）、
+\textbf{3D 定位层}（深度反投影 + TF 坐标变换）和\textbf{去重决策层}（距离聚类 + 多帧投票）——
+实现了对仿真环境中数字方块的可靠检测与精确计数。
+
+关键设计决策及其效果：
+\begin{itemize}
+  \item 双通道融合匹配兼顾结构特征和纹理特征，提高了识别准确率；
+  \item 中值滤波深度读取有效抑制了传感器噪声和深度空洞；
+  \item 基于 3D 地图坐标的距离聚类从根本上解决了重复计数问题；
+  \item 多帧投票机制对单次误识别具有自纠能力，提升了数字标签的可靠性；
+  \item 帧间冷却机制防止了连续帧的过度投票。
+\end{itemize}
+
+\end{document}

@@ -15,6 +15,11 @@ find_package(catkin REQUIRED COMPONENTS
   rviz
   pluginlib
   std_msgs
+<<<<<<< HEAD
+=======
+  geometry_msgs
+  roslib
+>>>>>>> initial commit
 )
 
 catkin_package(

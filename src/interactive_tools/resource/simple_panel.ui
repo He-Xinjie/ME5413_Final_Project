@@ -10,24 +10,37 @@
     <x>0</x>
     <y>0</y>
     <width>300</width>
+<<<<<<< HEAD
     <height>75</height>
+=======
+    <height>300</height>
+>>>>>>> initial commit
    </rect>
   </property>
   <property name="minimumSize">
    <size>
     <width>300</width>
+<<<<<<< HEAD
     <height>75</height>
+=======
+    <height>300</height>
+>>>>>>> initial commit
    </size>
   </property>
   <property name="maximumSize">
    <size>
     <width>300</width>
+<<<<<<< HEAD
     <height>75</height>
+=======
+    <height>300</height>
+>>>>>>> initial commit
    </size>
   </property>
   <property name="windowTitle">
    <string>Form</string>
   </property>
+<<<<<<< HEAD
   <widget class="QWidget" name="verticalLayoutWidget">
    <property name="geometry">
     <rect>
@@ -169,6 +182,214 @@
     </item>
    </layout>
   </widget>
+=======
+  <layout class="QVBoxLayout" name="mainLayout">
+   <!-- Title -->
+   <item>
+    <widget class="QLabel" name="label_status">
+     <property name="font">
+      <font>
+       <family>Ubuntu</family>
+       <pointsize>11</pointsize>
+       <bold>false</bold>
+      </font>
+     </property>
+     <property name="text">
+      <string>ME5413 Navigation Control</string>
+     </property>
+     <property name="alignment">
+      <set>Qt::AlignCenter</set>
+     </property>
+    </widget>
+   </item>
+   <!-- Respawn / Clear row -->
+   <item>
+    <layout class="QHBoxLayout" name="row_respawn">
+     <item>
+      <widget class="QPushButton" name="pushButton_regen">
+       <property name="font">
+        <font><family>Ubuntu</family><bold>true</bold></font>
+       </property>
+       <property name="text">
+        <string>Respawn Objects</string>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QPushButton" name="pushButton_clear">
+       <property name="font">
+        <font><family>Ubuntu</family><bold>true</bold></font>
+       </property>
+       <property name="text">
+        <string>Clear Objects</string>
+       </property>
+      </widget>
+     </item>
+    </layout>
+   </item>
+   <!-- Navigation Zone buttons -->
+   <item>
+    <layout class="QHBoxLayout" name="row_zones">
+     <item>
+      <widget class="QPushButton" name="pushButton_lower">
+       <property name="font">
+        <font><family>Ubuntu</family><bold>true</bold></font>
+       </property>
+       <property name="styleSheet">
+        <string>background-color: #4CAF50; color: white;</string>
+       </property>
+       <property name="text">
+        <string>Lower (0)</string>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QPushButton" name="pushButton_stairway">
+       <property name="font">
+        <font><family>Ubuntu</family><bold>true</bold></font>
+       </property>
+       <property name="styleSheet">
+        <string>background-color: #FF9800; color: white;</string>
+       </property>
+       <property name="text">
+        <string>Stairway (0)</string>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QPushButton" name="pushButton_upper">
+       <property name="font">
+        <font><family>Ubuntu</family><bold>true</bold></font>
+       </property>
+       <property name="styleSheet">
+        <string>background-color: #2196F3; color: white;</string>
+       </property>
+       <property name="text">
+        <string>Upper (0)</string>
+       </property>
+      </widget>
+     </item>
+    </layout>
+   </item>
+   <!-- Stop button -->
+   <item>
+    <widget class="QPushButton" name="pushButton_stop">
+     <property name="font">
+      <font><family>Ubuntu</family><bold>true</bold></font>
+     </property>
+     <property name="styleSheet">
+      <string>background-color: #F44336; color: white;</string>
+     </property>
+     <property name="text">
+      <string>STOP</string>
+     </property>
+    </widget>
+   </item>
+   <!-- Separator -->
+   <item>
+    <widget class="QFrame" name="line_separator">
+     <property name="frameShape">
+      <enum>QFrame::HLine</enum>
+     </property>
+     <property name="frameShadow">
+      <enum>QFrame::Sunken</enum>
+     </property>
+    </widget>
+   </item>
+   <!-- Zone selector row -->
+   <item>
+    <layout class="QHBoxLayout" name="row_zone_select">
+     <item>
+      <widget class="QLabel" name="label_save_to">
+       <property name="font">
+        <font><family>Ubuntu</family><pointsize>9</pointsize><bold>true</bold></font>
+       </property>
+       <property name="text">
+        <string>Save to:</string>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QComboBox" name="comboBox_zone">
+       <property name="font">
+        <font><family>Ubuntu</family></font>
+       </property>
+       <item>
+        <property name="text">
+         <string>Lower Level</string>
+        </property>
+       </item>
+       <item>
+        <property name="text">
+         <string>Stairway</string>
+        </property>
+       </item>
+       <item>
+        <property name="text">
+         <string>Upper Level</string>
+        </property>
+       </item>
+      </widget>
+     </item>
+    </layout>
+   </item>
+   <!-- Waypoint display -->
+   <item>
+    <widget class="QLabel" name="label_waypoint">
+     <property name="font">
+      <font><family>Ubuntu</family><pointsize>9</pointsize></font>
+     </property>
+     <property name="text">
+      <string>Click 2D Nav Goal, then Save</string>
+     </property>
+     <property name="alignment">
+      <set>Qt::AlignCenter</set>
+     </property>
+    </widget>
+   </item>
+   <!-- Save / Del Last / Clear row -->
+   <item>
+    <layout class="QHBoxLayout" name="row_waypoint">
+     <item>
+      <widget class="QPushButton" name="pushButton_save_wp">
+       <property name="font">
+        <font><family>Ubuntu</family><bold>true</bold></font>
+       </property>
+       <property name="styleSheet">
+        <string>background-color: #9C27B0; color: white;</string>
+       </property>
+       <property name="text">
+        <string>Save WP</string>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QPushButton" name="pushButton_del_last_wp">
+       <property name="font">
+        <font><family>Ubuntu</family><bold>true</bold></font>
+       </property>
+       <property name="styleSheet">
+        <string>background-color: #607D8B; color: white;</string>
+       </property>
+       <property name="text">
+        <string>Del Last</string>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QPushButton" name="pushButton_clear_wp">
+       <property name="font">
+        <font><family>Ubuntu</family><bold>true</bold></font>
+       </property>
+       <property name="text">
+        <string>Clear Zone</string>
+       </property>
+      </widget>
+     </item>
+    </layout>
+   </item>
+  </layout>
+>>>>>>> initial commit
  </widget>
  <resources/>
  <connections/>
