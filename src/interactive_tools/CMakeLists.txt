@@ -15,6 +15,8 @@ find_package(catkin REQUIRED COMPONENTS
   rviz
   pluginlib
   std_msgs
+  geometry_msgs
+  roslib
 )
 
 catkin_package(
