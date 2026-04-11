@@ -214,10 +214,15 @@ We are following (as much as possible):
 * [C++ Core Guidelines](https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines#main),
 * [ROS C++ Style Guide](http://wiki.ros.org/CppStyleGuide)
 
+ 
 ## License
 
+<<<<<<< HEAD
 <<<<<<< HEAD
 The [ME5413_Final_Project](https://github.com/NUS-Advanced-Robotics-Centre/ME5413_Final_Project) is released under the [MIT License](https://github.com/NUS-Advanced-Robotics-Centre/ME5413_Final_Project/blob/main/LICENSE)
 =======
 The [ME5413_Final_Project](https://github.com/NUS-Advanced-Robotics-Centre/ME5413_Final_Project) is released under the [MIT License](https://github.com/NUS-Advanced-Robotics-Centre/ME5413_Final_Project/blob/main/LICENSE)
 >>>>>>> initial commit
+=======
+The [ME5413_Final_Project](https://github.com/NUS-Advanced-Robotics-Centre/ME5413_Final_Project) is released under the [MIT License](https://github.com/NUS-Advanced-Robotics-Centre/ME5413_Final_Project/blob/main/LICENSE)
+>>>>>>> 1a1568ed833418f5c0dbc6241585c5ab242a0f4a
