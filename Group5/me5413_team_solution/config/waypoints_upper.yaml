@@ -1,0 +1,36 @@
+# Upper level waypoints (map frame)
+# Format: name, x, y, yaw
+- name: wp_0
+  x: 29.7123
+  y: 4.9219
+  yaw: -2.9227
+- name: wp_1
+  x: 30.0038
+  y: 9.5673
+  yaw: 3.0857
+- name: wp_2
+  x: 29.7819
+  y: 14.9307
+  yaw: -3.1036
+- name: wp_3
+  x: 29.3143
+  y: -0.2790
+  yaw: -3.0846
+  
+
+- name: wp_4
+  x: 25.9029
+  y: -0.5208
+  yaw: 3.1250
+- name: wp_5
+  x: 25.8851
+  y: 4.5818
+  yaw: 3.1315
+- name: wp_6
+  x: 25.7704
+  y: 9.6608
+  yaw: -3.0771
+- name: wp_7
+  x: 25.6892
+  y: 14.4173
+  yaw: -3.0275

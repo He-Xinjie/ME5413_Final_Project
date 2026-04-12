@@ -1,0 +1,7 @@
+# Stairway waypoints (map frame)
+# Format: name, x, y, yaw
+- name: wp_0
+  x: 42.6732
+  y: -2.9788
+  yaw: 1.7147
+
